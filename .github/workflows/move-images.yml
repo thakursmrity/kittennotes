@@ -1,0 +1,47 @@
+name: Move product images into the repo
+
+# Downloads every image the site loads from the Shopify CDN into images/,
+# shrinks it for the web, and points all pages at the local copy.
+# Runs automatically when this file changes, or by hand from the Actions tab.
+
+on:
+  push:
+    paths:
+      - .github/workflows/move-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  move-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download, resize and relink images
+        run: |
+          set -euo pipefail
+          mkdir -p images
+          BASE="https://cdn.shopify.com/s/files/1/0747/4069/5253/files/"
+          names=$(grep -ohE "cdn\.shopify\.com/s/files/1/0747/4069/5253/files/[^?\"')]+" *.html \
+                  | sed 's#.*/files/##' | sort -u)
+          if [ -z "$names" ]; then echo "No Shopify images left to move."; exit 0; fi
+          for n in $names; do
+            echo "Downloading $n"
+            curl -fsSL --retry 3 -o "images/$n" "${BASE}${n}"
+            # Max 1600px wide, web quality, strip metadata
+            mogrify -resize '1600x>' -quality 82 -strip "images/$n"
+          done
+          # Point every page at the local copy
+          sed -i -E "s#https://cdn\.shopify\.com/s/files/1/0747/4069/5253/files/([^?\"')]+)\?width=[0-9]+#images/\1#g" *.html
+          echo "Moved $(ls images | wc -l) images"
+          du -sh images
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "Nothing to commit" || git commit -m "Move product images from Shopify CDN into the repo"
+          git push
